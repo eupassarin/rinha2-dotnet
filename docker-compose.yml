@@ -1,0 +1,86 @@
+version: '3.5'
+
+x-resources-api: &resources-api
+  resources:
+    limits:
+      cpus: '0.2'
+      memory: 80M
+
+x-resources-db: &resources-db
+  resources:
+    limits:
+      cpus: '0.9'
+      memory: 350M
+
+x-resources-nginx: &resources-nginx
+  resources:
+    limits:
+      cpus: '0.2'
+      memory: 40M
+
+
+x-api: &api
+  build: .
+  depends_on:
+    db:
+      condition: service_healthy
+  env_file:
+    - .env   
+  deploy:
+    <<: *resources-api
+
+services:
+  api01:
+    <<: *api
+    environment:
+      HTTP_PORT: 8080
+      PG_HOST: 'db'
+    ports:
+      - "8080:8080"
+
+  api02:
+    <<: *api
+    environment:
+      HTTP_PORT: 8081
+      PG_HOST: 'db'
+    ports:
+      - "8081:8081"
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "9999:9999"
+    depends_on:
+      - api01
+      - api02
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    deploy:
+      <<: *resources-nginx
+
+  db:
+    image: postgres
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env
+    command: |
+      postgres 
+      -c config_file=/docker-entrypoint-initdb.d/postgresql.conf
+      -c fsync=off
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./postgresql.conf:/docker-entrypoint-initdb.d/postgresql.conf
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    deploy:
+      <<: *resources-db
+
+networks:
+  default:
+    driver: bridge
+    name: rinhanet
