@@ -6,7 +6,7 @@ using Npgsql;
 var builder = WebApplication.CreateSlimBuilder(args);
 var pgHost = Environment.GetEnvironmentVariable("PG_HOST") ?? "localhost";
 var maxPoolSize = Environment.GetEnvironmentVariable("MAX_POOL_SIZE") ?? "256";
-var connStr = @$"Host={pgHost};Database=rinha;Username=root;Password=998877;Minimum Pool Size=50;Maximum Pool Size={maxPoolSize};";
+var connStr = @$"Host={pgHost};Database=rinha;Username=root;Password=998877;Minimum Pool Size=170;Maximum Pool Size={maxPoolSize};";
 
 builder.Services.AddSingleton<NpgsqlDataSource>(new NpgsqlDataSourceBuilder(connStr).Build());
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -18,7 +18,7 @@ var app = builder.Build();
 app.UseUnprocessableEntityMiddleware();
 
 app.MapPost("/clientes/{id}/transacoes", 
-    ([FromServices] NpgsqlDataSource dataSource, [FromRoute] short id, [FromBody] Transacao t) =>
+    async ([FromServices] NpgsqlDataSource dataSource, [FromRoute] short id, [FromBody] Transacao t) =>
 {
     if (id > 5) return Results.NotFound();
 
@@ -31,17 +31,17 @@ app.MapPost("/clientes/{id}/transacoes",
     {
         case "d":
         {
-            var conn = dataSource.OpenConnection();
+            var conn = await dataSource.OpenConnectionAsync();
             var res = new NpgsqlCommand(@$"SELECT D({id}::SMALLINT, {t.valor}, '{t.descricao}', {limite})", conn).ExecuteScalar();
-            conn.Close();
+            conn.CloseAsync();
             if (res is DBNull) return Results.UnprocessableEntity();
             return Results.Ok(new SaldoLimite((int)res, limite));
         }
         case "c":
         {
-            var conn = dataSource.OpenConnection();
+            var conn = await dataSource.OpenConnectionAsync();
             var saldo = new NpgsqlCommand(@$"SELECT C({id}::SMALLINT, {t.valor}, '{t.descricao}')", conn).ExecuteScalar();
-            conn.Close();
+            conn.CloseAsync();
             return Results.Ok(new SaldoLimite((int) saldo, limite));
         }
         default:
@@ -49,24 +49,24 @@ app.MapPost("/clientes/{id}/transacoes",
     }
      
 });
-app.MapGet("/clientes/{id}/extrato", (NpgsqlDataSource dataSource, [FromRoute] short id) =>
+app.MapGet("/clientes/{id}/extrato", async (NpgsqlDataSource dataSource, [FromRoute] short id) =>
 {
     if (id > 5) return Results.NotFound(); 
 
     var limite = new[] { 1000_00, 800_00, 10_000_00, 100_000_00, 5000_00 }[id - 1];
     
-    var conn_e = dataSource.OpenConnection();
-    var saldo = new NpgsqlCommand(@$"SELECT saldo FROM cliente WHERE id = {id}", conn_e).ExecuteScalar();
-    conn_e.Close();
+    var conn_e = await dataSource.OpenConnectionAsync();
+    var saldo = await new NpgsqlCommand(@$"SELECT saldo FROM cliente WHERE id = {id}", conn_e).ExecuteScalarAsync();
+    conn_e.CloseAsync();
 
-    var conn_c = dataSource.OpenConnection();
-    var res = new NpgsqlCommand(@$"
+    var conn_c = await dataSource.OpenConnectionAsync();
+    var res = await new NpgsqlCommand(@$"
             SELECT valor, tipo, descricao, realizada_em FROM transacao WHERE cliente_id = {id}
-            ORDER BY realizada_em DESC LIMIT 10", conn_c).ExecuteReader();
-    var transacoes = Enumerable.Range(0, 10).Select(_ => res.Read()).TakeWhile(hasNext => hasNext)
+            ORDER BY realizada_em DESC LIMIT 10", conn_c).ExecuteReaderAsync();
+    var transacoes = Enumerable.Range(0, 10).Select(_ => res.ReadAsync().Result).TakeWhile(hasNext => hasNext)
             .Select(_ => new Transacao(valor: res.GetInt32(0),tipo: res.GetString(1),
                 descricao: res.GetString(2),realizada_em: res.GetInt64(3))).ToArray();
-    conn_c.Close();
+    conn_c.CloseAsync();
 
     return Results.Ok(new Extrato(new Saldo((int)saldo , DateTime.Now, limite), transacoes));
 });
